@@ -1,0 +1,169 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg-deep:     #080c10;
+  --bg-surface:  #0d1520;
+  --bg-raised:   #132030;
+  --bg-hover:    #1a2d45;
+  --accent:      #00d4ff;
+  --accent-dim:  #005f72;
+  --accent-glow: rgba(0, 212, 255, 0.15);
+  --gold:        #f5c842;
+  --gold-dim:    #7a6520;
+  --rtm:         #f5c842;
+  --danger:      #ff4d4d;
+  --success:     #00e676;
+  --border:      rgba(0, 212, 255, 0.12);
+  --border-bright: rgba(0, 212, 255, 0.35);
+  --text-muted:  #6b8099;
+  --text-dim:    #8fa8bf;
+  --font-display: 'Rajdhani', sans-serif;
+  --font-mono:   'IBM Plex Mono', monospace;
+  --font-body:   'Inter', sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+html { scroll-behavior: smooth; }
+
+body {
+  font-family: var(--font-body);
+  background: var(--bg-deep);
+  min-height: 100vh;
+}
+
+/* Scanline effect overlay */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0,0,0,0.03) 2px,
+    rgba(0,0,0,0.03) 4px
+  );
+  pointer-events: none;
+  z-index: 9999;
+}
+
+.font-display { font-family: var(--font-display); }
+.font-mono    { font-family: var(--font-mono); }
+
+/* Glow card */
+.glow-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  transition: border-color 0.2s;
+}
+.glow-card:hover { border-color: var(--border-bright); }
+
+/* Accent button */
+.btn-accent {
+  background: var(--accent);
+  color: #000;
+  font-family: var(--font-display);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  padding: 0.5rem 1.25rem;
+  border-radius: 4px;
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: all 0.15s;
+  text-transform: uppercase;
+  border: none;
+}
+.btn-accent:hover {
+  background: #33deff;
+  box-shadow: 0 0 20px rgba(0, 212, 255, 0.4);
+}
+.btn-accent:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.btn-ghost {
+  background: transparent;
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  font-family: var(--font-display);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  padding: 0.45rem 1rem;
+  border-radius: 4px;
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: all 0.15s;
+  text-transform: uppercase;
+}
+.btn-ghost:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* Timer ring animation */
+@keyframes timer-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+.timer-urgent { animation: timer-pulse 0.8s ease-in-out infinite; }
+
+/* Pick reveal animation */
+@keyframes pick-slide-in {
+  from { transform: translateY(-12px); opacity: 0; }
+  to   { transform: translateY(0);    opacity: 1; }
+}
+.pick-reveal { animation: pick-slide-in 0.35s cubic-bezier(0.22, 1, 0.36, 1) forwards; }
+
+/* RTM highlight */
+.rtm-cell {
+  background: rgba(245, 200, 66, 0.12) !important;
+  border-left: 2px solid var(--gold) !important;
+}
+
+/* Current-turn highlight */
+.current-turn-col {
+  background: rgba(0, 212, 255, 0.06);
+  border-left: 2px solid var(--accent);
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: var(--bg-deep); }
+::-webkit-scrollbar-thumb { background: var(--accent-dim); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--accent); }
+
+/* Search input */
+.search-input {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  color: white;
+  padding: 0.5rem 0.75rem 0.5rem 2.25rem;
+  border-radius: 4px;
+  font-family: var(--font-body);
+  font-size: 0.875rem;
+  width: 100%;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.search-input:focus { border-color: var(--accent); }
+.search-input::placeholder { color: var(--text-muted); }
+
+/* Role badges */
+.role-badge {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  padding: 2px 7px;
+  border-radius: 3px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.role-batter     { background: rgba(0,230,118,0.12); color: #00e676; border: 1px solid rgba(0,230,118,0.25); }
+.role-bowler     { background: rgba(255,77,77,0.12);  color: #ff6b6b; border: 1px solid rgba(255,77,77,0.25); }
+.role-allrounder { background: rgba(0,212,255,0.12);  color: #00d4ff; border: 1px solid rgba(0,212,255,0.25); }
+.role-keeper     { background: rgba(245,200,66,0.12); color: #f5c842; border: 1px solid rgba(245,200,66,0.25); }
