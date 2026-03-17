@@ -38,7 +38,11 @@ export default function PlayerSearch({
   // Parse rtm_pending from live room state
   const rtmPending = useMemo(() => {
     if (!room.rtm_pending) return null
-    try { return JSON.parse(room.rtm_pending) } catch { return null }
+    try {
+      return typeof room.rtm_pending === 'string'
+        ? JSON.parse(room.rtm_pending)
+        : room.rtm_pending
+    } catch { return null }
   }, [room.rtm_pending])
 
   const isMyRTM = rtmPending?.eligible_team_id === myTeamId
