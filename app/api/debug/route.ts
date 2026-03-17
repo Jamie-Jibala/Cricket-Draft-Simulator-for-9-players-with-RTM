@@ -79,4 +79,3 @@ export async function GET(req: Request) {
     player_lookup: playerLookup,
   })
 }
-```
