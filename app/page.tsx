@@ -137,7 +137,7 @@ export default function Home() {
               <label className="text-xs text-[var(--text-muted)] uppercase tracking-widest font-mono block mb-1">Your Team Name</label>
               <input
                 className="search-input pl-3"
-                placeholder="e.g. Chennai Kings"
+                placeholder="e.g. Jay"
                 value={teamName}
                 onChange={e => setTeamName(e.target.value)}
                 onKeyDown={e => e.key === 'Enter' && joinDraft()}
