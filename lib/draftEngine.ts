@@ -96,6 +96,7 @@ export async function processPick(params: {
   if (pickErr) return { success: false, error: 'Failed to record pick' }
 
   // 5b. Check RTM eligibility — look up previous season ownership
+  // 5b. Check RTM eligibility — look up previous season ownership
   const { data: prevOwner } = await db
     .from('previous_season')
     .select('team_name')
@@ -112,7 +113,9 @@ export async function processPick(params: {
       .maybeSingle()
 
     if (eligibleTeam && eligibleTeam.rtm_remaining > 0 && eligibleTeam.id !== teamId) {
-      // Pause draft and broadcast RTM pending to eligible team
+      // Pause draft — do NOT advance pick counter yet
+      // do NOT write to Google Sheets yet
+      // current_pick stays the same so original drafter goes again if RTM is claimed
       await db.from('draft_rooms').update({
         status: 'paused',
         timer_active: false,
@@ -122,6 +125,7 @@ export async function processPick(params: {
           player_id: playerId,
           eligible_team_id: eligibleTeam.id,
           drafted_by_team_id: teamId,
+          drafter_team_name: team.team_name,
         })
       }).eq('id', roomId)
 
