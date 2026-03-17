@@ -186,14 +186,17 @@ export default function RoomPage() {
       <div className="flex-1 flex overflow-hidden">
         {/* Left: Player search */}
         <div className="w-80 flex-shrink-0 border-r border-[var(--border)] flex flex-col overflow-hidden">
-          <PlayerSearch
+         <PlayerSearch
             players={players}
             isMyTurn={isMyTurn}
             myTeamId={myTeamId}
             roomId={room.id}
+            room={room}
             picks={picks}
             teams={teams}
             myTeam={myTeam}
+            isHost={isHost}
+            hostId={hostId}
             onPickMade={loadAll}
           />
         </div>
