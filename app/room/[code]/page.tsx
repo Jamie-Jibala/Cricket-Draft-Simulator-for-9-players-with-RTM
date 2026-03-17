@@ -107,22 +107,11 @@ export default function RoomPage() {
     )
   }
 
-  if (!room) return <div className="min-h-screen flex items-center justify-center text-red-400">Room not found</div>
-
-  const orderedTeamIds = draftOrder.map(o => o.team_id)
-  const currentTeamIndex = room.status === 'drafting' ? getTeamIndexForPick(room.current_pick) : -1
-  const currentTeamId = orderedTeamIds[currentTeamIndex] ?? ''
-  const isMyTurn = (currentTeamId === myTeamId || myTeam?.extra_pick === true) && room.status === 'drafting'
-  const myTeam = teams.find(t => t.id === myTeamId)
-  const currentTeam = teams.find(t => t.id === currentTeamId)
-  const myPicks = picks.filter(p => p.team_id === myTeamId)
-
-  // Parse RTM pending
-  const rtmPending = room.rtm_pending
-    ? (typeof room.rtm_pending === 'string' ? JSON.parse(room.rtm_pending) : room.rtm_pending)
-    : null
-  const isMyRTM = rtmPending && rtmPending.eligible_team_id === myTeamId
-  const eligibleTeam = rtmPending ? teams.find(t => t.id === rtmPending.eligible_team_id) : null
+  if (!room) return (
+    <div className="min-h-screen flex items-center justify-center text-red-400">
+      Room not found
+    </div>
+  )
 
   if (room.status === 'waiting') {
     return (
@@ -138,10 +127,26 @@ export default function RoomPage() {
     )
   }
 
+  // Compute state
+  const orderedTeamIds = draftOrder.map(o => o.team_id)
+  const currentTeamIndex = room.status === 'drafting' ? getTeamIndexForPick(room.current_pick) : -1
+  const currentTeamId = orderedTeamIds[currentTeamIndex] ?? ''
+  const myTeam = teams.find(t => t.id === myTeamId)
+  const currentTeam = teams.find(t => t.id === currentTeamId)
+  const myPicks = picks.filter(p => p.team_id === myTeamId)
+  const isMyTurn = (currentTeamId === myTeamId || myTeam?.extra_pick === true) && room.status === 'drafting'
+
+  // Parse RTM pending
+  const rtmPending = room.rtm_pending
+    ? (typeof room.rtm_pending === 'string' ? JSON.parse(room.rtm_pending) : room.rtm_pending)
+    : null
+  const isMyRTM = rtmPending && rtmPending.eligible_team_id === myTeamId
+  const eligibleTeam = rtmPending ? teams.find(t => t.id === rtmPending.eligible_team_id) : null
+
   return (
     <div className="min-h-screen flex flex-col" style={{ background: 'var(--bg-deep)' }}>
 
-      {/* ── RTM FULL SCREEN OVERLAY ── */}
+      {/* ── RTM FULL SCREEN OVERLAY — only shown to eligible team ── */}
       {rtmPending && isMyRTM && (
         <div className="fixed inset-0 z-50 flex items-center justify-center"
           style={{ background: 'rgba(5,10,18,0.93)' }}>
@@ -172,7 +177,11 @@ export default function RoomPage() {
             <div className="flex gap-3 justify-center">
               <button
                 disabled={rtmLoading}
-                style={{ background: 'var(--gold)', color: '#000', border: 'none', cursor: 'pointer', padding: '12px 28px', borderRadius: 6, fontWeight: 700, fontSize: 15 }}
+                style={{
+                  background: 'var(--gold)', color: '#000', border: 'none',
+                  cursor: 'pointer', padding: '12px 28px', borderRadius: 6,
+                  fontWeight: 700, fontSize: 15,
+                }}
                 onClick={() => handleRTM('claim', myTeamId, rtmPending.pick_number)}
               >
                 {rtmLoading ? '...' : '✅ Use RTM'}
@@ -239,14 +248,18 @@ export default function RoomPage() {
       {/* RTM waiting banner for everyone else */}
       {rtmPending && !isMyRTM && (
         <div className="px-6 py-2 text-center font-mono text-sm"
-          style={{ background: 'rgba(245,200,66,0.08)', borderBottom: '1px solid rgba(245,200,66,0.3)', color: 'var(--gold)' }}>
+          style={{
+            background: 'rgba(245,200,66,0.08)',
+            borderBottom: '1px solid rgba(245,200,66,0.3)',
+            color: 'var(--gold)',
+          }}>
           ⏳ {eligibleTeam?.team_name ?? 'A team'} is deciding RTM for {rtmPending.player_name}...
         </div>
       )}
 
       {room.status === 'completed' && (
         <div className="bg-[rgba(0,230,118,0.1)] border-b border-[var(--success)] px-6 py-2 text-sm font-mono text-[var(--success)] text-center tracking-wider">
-          ✓ DRAFT COMPLETE — All 144 picks made
+          ✓ DRAFT COMPLETE
         </div>
       )}
 
