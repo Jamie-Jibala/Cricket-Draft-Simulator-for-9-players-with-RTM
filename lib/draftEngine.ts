@@ -260,8 +260,41 @@ export async function processRTM(params: {
   return { success: true, pick: existingPick }
 }
 
-async function advanceAfterRTMDecision(db: any, roomId: string, room: any) {
-  const nextPick = room.current_pick + 1
+async function advanceAfterRTMDecision(
+  db: any,
+  roomId: string,
+  room: any,
+  rtmClaimed: boolean,
+  pending: any,
+  orderRows: any[]
+) {
+  // If RTM was CLAIMED:
+  //   - original drafter picks again (current_pick stays the same)
+  //   - RTM team skips their next turn (already set via skip_next_pick)
+  // If RTM was DECLINED:
+  //   - normal advance, original drafter does NOT get another pick
+  let nextPick = room.current_pick + 1
+
+  if (rtmClaimed) {
+    // Don't advance — original drafter gets their pick back
+    nextPick = room.current_pick
+  } else {
+    // Normal advance — check if next team needs to skip
+    if (nextPick <= room.total_picks) {
+      const nextTeamIndex = getTeamIndexForPick(nextPick, 9)
+      const nextTeamId = orderRows[nextTeamIndex]?.team_id
+      const { data: nextTeam } = await db
+        .from('teams')
+        .select('skip_next_pick')
+        .eq('id', nextTeamId)
+        .single()
+      if (nextTeam?.skip_next_pick) {
+        await db.from('teams').update({ skip_next_pick: false }).eq('id', nextTeamId)
+        nextPick++
+      }
+    }
+  }
+
   const newStatus = nextPick > room.total_picks ? 'completed' : 'drafting'
   await db.from('draft_rooms').update({
     status: newStatus,
