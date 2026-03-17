@@ -19,7 +19,7 @@ function roleBadgeClass(role?: string) {
   if (r.includes('batter') || r.includes('batsman')) return 'text-[#00e676]'
   if (r.includes('bowler')) return 'text-[#ff6b6b]'
   if (r.includes('all')) return 'text-[#00d4ff]'
-  if (r.includes('keeper') || r.includes('wk')) return 'text-[#f5c842]'
+  if (r.includes('keeper') || r.includes('wk') || r.includes('wicket')) return 'text-[#f5c842]'
   return 'text-[var(--text-dim)]'
 }
 
@@ -27,7 +27,6 @@ export default function DraftBoard({ picks, teams, draftOrder, currentPick, tota
   const NUM_TEAMS = 9
   const NUM_ROUNDS = 16
 
-  // Build ordered teams list
   const orderedTeams = useMemo(() => {
     return draftOrder
       .slice()
@@ -36,21 +35,29 @@ export default function DraftBoard({ picks, teams, draftOrder, currentPick, tota
       .filter(Boolean) as Team[]
   }, [draftOrder, teams])
 
-  // Build pick map: pickNumber → pick
-  const pickMap = useMemo(() => {
-    const m: Record<number, Pick> = {}
-    picks.forEach(p => { m[p.pick_number] = p })
+  // Build team pick lists: team_id → picks sorted by pick_number
+  // This is the key fix — board shows picks per TEAM, not per snake slot
+  const teamPickMap = useMemo(() => {
+    const m: Record<string, Pick[]> = {}
+    orderedTeams.forEach(t => { m[t.id] = [] })
+    picks
+      .slice()
+      .sort((a, b) => a.pick_number - b.pick_number)
+      .forEach(p => {
+        if (m[p.team_id]) m[p.team_id].push(p)
+        else m[p.team_id] = [p]
+      })
     return m
-  }, [picks])
+  }, [picks, orderedTeams])
 
-  // Current turn team index (0-based column)
+  // For current pick indicator — which column is on the clock
   const currentTeamColIdx = status === 'drafting'
     ? getTeamIndexForPick(currentPick, NUM_TEAMS)
     : -1
 
   if (orderedTeams.length === 0) {
     return (
-      <div className="p-8 text-center text-[var(--text-muted)] font-mono text-sm">
+      <div className="p-8 text-center font-mono text-sm" style={{ color: 'var(--text-muted)' }}>
         Draft order not set yet
       </div>
     )
@@ -59,22 +66,24 @@ export default function DraftBoard({ picks, teams, draftOrder, currentPick, tota
   return (
     <div className="p-4">
       <div className="mb-3 flex items-center gap-3">
-        <span className="font-display text-sm tracking-widest uppercase text-[var(--text-dim)]"
-          style={{ fontFamily: 'var(--font-display)' }}>
+        <span className="font-display text-sm tracking-widest uppercase"
+          style={{ fontFamily: 'var(--font-display)', color: 'var(--text-dim)' }}>
           Draft Board
         </span>
         {status === 'drafting' && (
-          <span className="font-mono text-xs text-[var(--accent)]">
+          <span className="font-mono text-xs" style={{ color: 'var(--accent)' }}>
             Round {getRoundForPick(currentPick)} · Pick {currentPick}
           </span>
         )}
-        <div className="ml-auto flex items-center gap-4 text-xs font-mono text-[var(--text-muted)]">
+        <div className="ml-auto flex items-center gap-4 text-xs font-mono" style={{ color: 'var(--text-muted)' }}>
           <span className="flex items-center gap-1">
-            <span className="w-3 h-3 rounded-sm bg-[rgba(245,200,66,0.25)] inline-block border border-[var(--gold)]" />
+            <span className="w-3 h-3 rounded-sm inline-block border"
+              style={{ background: 'rgba(245,200,66,0.25)', borderColor: 'var(--gold)' }} />
             RTM
           </span>
           <span className="flex items-center gap-1">
-            <span className="w-3 h-3 rounded-sm bg-[rgba(0,212,255,0.15)] inline-block border border-[var(--accent)]" />
+            <span className="w-3 h-3 rounded-sm inline-block border"
+              style={{ background: 'rgba(0,212,255,0.15)', borderColor: 'var(--accent)' }} />
             Your team
           </span>
         </div>
@@ -84,13 +93,13 @@ export default function DraftBoard({ picks, teams, draftOrder, currentPick, tota
         <table className="w-full border-collapse text-xs" style={{ minWidth: `${NUM_TEAMS * 110}px` }}>
           <thead>
             <tr>
-              <th className="w-8 text-[var(--text-muted)] font-mono text-right pr-2 pb-2 sticky left-0 bg-[var(--bg-deep)] z-10">#</th>
+              <th className="w-8 font-mono text-right pr-2 pb-2 sticky left-0 z-10"
+                style={{ color: 'var(--text-muted)', background: 'var(--bg-deep)' }}>#</th>
               {orderedTeams.map((team, colIdx) => {
                 const isCurrentCol = colIdx === currentTeamColIdx
                 const isMyCol = team.id === myTeamId
                 return (
-                  <th
-                    key={team.id}
+                  <th key={team.id}
                     className="pb-2 px-2 font-display font-600 tracking-wide text-center transition-colors"
                     style={{
                       fontFamily: 'var(--font-display)',
@@ -101,78 +110,68 @@ export default function DraftBoard({ picks, teams, draftOrder, currentPick, tota
                         : isMyCol
                         ? '1px solid rgba(0,212,255,0.3)'
                         : '1px solid var(--border)',
-                    }}
-                  >
+                    }}>
                     {team.team_name}
-                    {isCurrentCol && <span className="ml-1 text-[var(--accent)]">▾</span>}
+                    {isCurrentCol && <span className="ml-1" style={{ color: 'var(--accent)' }}>▾</span>}
                   </th>
                 )
               })}
             </tr>
           </thead>
           <tbody>
-            {Array.from({ length: NUM_ROUNDS }, (_, roundIdx) => {
-              const round = roundIdx + 1
-              const isEvenRound = round % 2 === 0
+            {Array.from({ length: NUM_ROUNDS }, (_, rowIdx) => (
+              <tr key={rowIdx} className="group">
+                <td className="text-right pr-2 py-0.5 font-mono sticky left-0 z-10"
+                  style={{ color: 'var(--text-muted)', background: 'var(--bg-deep)', fontSize: '0.7rem' }}>
+                  {rowIdx + 1}
+                </td>
+                {orderedTeams.map((team, colIdx) => {
+                  const teamPicks = teamPickMap[team.id] ?? []
+                  const pick = teamPicks[rowIdx] ?? null
+                  const isMyTeamCol = team.id === myTeamId
+                  const isCurrentCol = colIdx === currentTeamColIdx
+                  const isCurrentSlot = isCurrentCol && rowIdx === teamPicks.length && status === 'drafting'
 
-              return (
-                <tr key={round} className="group">
-                  <td className="text-right pr-2 py-0.5 text-[var(--text-muted)] font-mono sticky left-0 bg-[var(--bg-deep)] z-10">
-                    {round}
-                  </td>
-                  {Array.from({ length: NUM_TEAMS }, (_, colIdx) => {
-                    // Snake: even rounds go right→left
-                    const teamColIdx = isEvenRound ? NUM_TEAMS - 1 - colIdx : colIdx
-                    const pickNumber = (round - 1) * NUM_TEAMS + teamColIdx + 1
-                    const pick = pickMap[pickNumber]
-                    const isCurrentPick = pickNumber === currentPick && status === 'drafting'
-                    const isFuturePick = pickNumber >= currentPick && !pick
-                    const isMyTeamCol = orderedTeams[teamColIdx]?.id === myTeamId
-                    const isCurrentCol = teamColIdx === currentTeamColIdx
-
-                    return (
-                      <td
-                        key={colIdx}
-                        className="px-1.5 py-0.5 transition-all"
-                        style={{
-                          background: pick?.rtm_used
-                            ? 'rgba(245,200,66,0.08)'
-                            : isMyTeamCol
-                            ? 'rgba(0,212,255,0.04)'
-                            : isCurrentCol
-                            ? 'rgba(0,212,255,0.03)'
-                            : 'transparent',
-                          borderLeft: pick?.rtm_used
-                            ? '2px solid rgba(245,200,66,0.5)'
-                            : isCurrentCol
-                            ? '1px solid rgba(0,212,255,0.15)'
-                            : '1px solid transparent',
-                        }}
-                      >
-                        {pick ? (
-                          <div className="py-1 pick-reveal">
-                            <div className="text-white font-medium leading-tight" style={{ fontSize: '0.72rem' }}>
-                              {(pick as any).players?.player_name ?? '—'}
-                            </div>
-                            <div className={`leading-tight ${roleBadgeClass((pick as any).players?.role)}`}
-                              style={{ fontSize: '0.65rem' }}>
-                              {(pick as any).players?.role}
-                              {pick.rtm_used && <span className="ml-1 text-[var(--gold)]">RTM</span>}
-                            </div>
+                  return (
+                    <td key={team.id} className="px-1.5 py-0.5 transition-all"
+                      style={{
+                        background: pick?.rtm_used
+                          ? 'rgba(245,200,66,0.08)'
+                          : isMyTeamCol
+                          ? 'rgba(0,212,255,0.04)'
+                          : isCurrentCol
+                          ? 'rgba(0,212,255,0.03)'
+                          : 'transparent',
+                        borderLeft: pick?.rtm_used
+                          ? '2px solid rgba(245,200,66,0.5)'
+                          : isCurrentCol
+                          ? '1px solid rgba(0,212,255,0.15)'
+                          : '1px solid transparent',
+                      }}>
+                      {pick ? (
+                        <div className="py-1 pick-reveal">
+                          <div className="font-medium leading-tight text-white" style={{ fontSize: '0.72rem' }}>
+                            {(pick as any).players?.player_name ?? '—'}
                           </div>
-                        ) : isCurrentPick ? (
-                          <div className="py-1 text-center">
-                            <div className="inline-block w-1.5 h-1.5 rounded-full bg-[var(--accent)] animate-pulse" />
+                          <div className={`leading-tight ${roleBadgeClass((pick as any).players?.role)}`}
+                            style={{ fontSize: '0.65rem' }}>
+                            {(pick as any).players?.role}
+                            {pick.rtm_used && <span className="ml-1" style={{ color: 'var(--gold)' }}>RTM</span>}
                           </div>
-                        ) : (
-                          <div className="py-2 text-center text-[rgba(255,255,255,0.05)] text-xs">·</div>
-                        )}
-                      </td>
-                    )
-                  })}
-                </tr>
-              )
-            })}
+                        </div>
+                      ) : isCurrentSlot ? (
+                        <div className="py-1 text-center">
+                          <div className="inline-block w-1.5 h-1.5 rounded-full animate-pulse"
+                            style={{ background: 'var(--accent)' }} />
+                        </div>
+                      ) : (
+                        <div className="py-2 text-center text-xs" style={{ color: 'rgba(255,255,255,0.05)' }}>·</div>
+                      )}
+                    </td>
+                  )
+                })}
+              </tr>
+            ))}
           </tbody>
         </table>
       </div>
