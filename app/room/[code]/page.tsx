@@ -61,7 +61,7 @@ export default function RoomPage() {
 
     const channel = supabase.channel(`room:${room.id}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'draft_rooms', filter: `id=eq.${room.id}` },
-        (payload) => setRoom(payload.new as DraftRoom))
+        () => loadAll())
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'picks', filter: `room_id=eq.${room.id}` },
         () => loadAll())
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'picks', filter: `room_id=eq.${room.id}` },
