@@ -219,11 +219,42 @@ export async function processRTM(params: {
     return { success: false, error: 'This RTM is not for your team' }
   }
 
+  // Load draft order (needed for skip logic on decline)
+  const { data: orderRows } = await db
+    .from('draft_order')
+    .select('team_id, position')
+    .eq('room_id', roomId)
+    .order('position')
+
   if (action === 'decline') {
-    await advanceAfterRTMDecision(db, roomId, room)
+    // On decline — write original pick to Sheets now
+    const { data: declinePick } = await db
+      .from('picks')
+      .select('*, players(*), teams(*)')
+      .eq('room_id', roomId)
+      .eq('pick_number', pickNumber)
+      .single()
+
+    if (declinePick) {
+      const teamPosition = (orderRows ?? []).findIndex((o: any) => o.team_id === declinePick.team_id)
+      const teamPickCount = await db
+        .from('picks')
+        .select('id', { count: 'exact' })
+        .eq('room_id', roomId)
+        .eq('team_id', declinePick.team_id)
+      writePick({
+        teamName: (declinePick as any).teams?.team_name ?? '',
+        playerName: (declinePick as any).players?.player_name ?? '',
+        pickInTeam: (teamPickCount.count ?? 1) as number,
+        rtmUsed: false,
+        teamColumnIndex: teamPosition,
+        allTeamNames: (orderRows ?? []).map((o: any) => o.team_id),
+      }).catch(console.error)
+    }
+
+    await advanceAfterRTMDecision(db, roomId, room, false, pending, orderRows ?? [])
     return { success: true }
   }
-
   // --- CLAIM ---
   const { data: existingPick } = await db
     .from('picks')
@@ -255,7 +286,23 @@ export async function processRTM(params: {
     .update({ rtm_remaining: claimingTeam.rtm_remaining - 1, skip_next_pick: true })
     .eq('id', pending.eligible_team_id)
 
-  await advanceAfterRTMDecision(db, roomId, room)
+  // Write RTM pick to Sheets under the CLAIMING team's column
+  const teamPosition = (orderRows ?? []).findIndex((o: any) => o.team_id === pending.eligible_team_id)
+  const teamPickCount = await db
+    .from('picks')
+    .select('id', { count: 'exact' })
+    .eq('room_id', roomId)
+    .eq('team_id', pending.eligible_team_id)
+  writePick({
+    teamName: claimingTeam.team_name,
+    playerName: existingPick.players?.player_name ?? '',
+    pickInTeam: (teamPickCount.count ?? 1) as number,
+    rtmUsed: true,
+    teamColumnIndex: teamPosition,
+    allTeamNames: (orderRows ?? []).map((o: any) => o.team_id),
+  }).catch(console.error)
+
+  await advanceAfterRTMDecision(db, roomId, room, true, pending, orderRows ?? [])
 
   return { success: true, pick: existingPick }
 }
