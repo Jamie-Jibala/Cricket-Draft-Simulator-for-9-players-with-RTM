@@ -11,6 +11,7 @@ export interface DraftRoom {
   total_picks: number
   timer_remaining: number
   timer_active: boolean
+  rtm_pending: string | null
   created_at: string
   updated_at: string
 }
