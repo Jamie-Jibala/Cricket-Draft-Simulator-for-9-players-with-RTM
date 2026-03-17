@@ -112,7 +112,7 @@ export default function RoomPage() {
   const orderedTeamIds = draftOrder.map(o => o.team_id)
   const currentTeamIndex = room.status === 'drafting' ? getTeamIndexForPick(room.current_pick) : -1
   const currentTeamId = orderedTeamIds[currentTeamIndex] ?? ''
-  const isMyTurn = currentTeamId === myTeamId && room.status === 'drafting'
+  const isMyTurn = (currentTeamId === myTeamId || myTeam?.extra_pick === true) && room.status === 'drafting'
   const myTeam = teams.find(t => t.id === myTeamId)
   const currentTeam = teams.find(t => t.id === currentTeamId)
   const myPicks = picks.filter(p => p.team_id === myTeamId)
