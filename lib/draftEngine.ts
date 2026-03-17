@@ -8,184 +8,80 @@ export interface PickResult {
   rtmPending?: boolean
 }
 
-/**
- * Atomically process a draft pick.
- * All validation is server-side; clients only see the result.
- */
 export async function processPick(params: {
   roomId: string
   teamId: string
   playerId: string
-  rtmUsed?: boolean
 }): Promise<PickResult> {
   const db = createServiceClient()
-  const { roomId, teamId, playerId, rtmUsed = false } = params
+  const { roomId, teamId, playerId } = params
 
-  // 1. Load room state
-  const { data: room, error: roomErr } = await db
-    .from('draft_rooms')
-    .select('*')
-    .eq('id', roomId)
-    .single()
-
-  if (roomErr || !room) return { success: false, error: 'Room not found' }
+  const { data: room } = await db.from('draft_rooms').select('*').eq('id', roomId).single()
+  if (!room) return { success: false, error: 'Room not found' }
   if (room.status !== 'drafting') return { success: false, error: 'Draft is not active' }
 
-  // 2. Load draft order
   const { data: orderRows } = await db
-    .from('draft_order')
-    .select('team_id, position, teams(team_name)')
-    .eq('room_id', roomId)
-    .order('position')
+    .from('draft_order').select('team_id, position, teams(team_name)').eq('room_id', roomId).order('position')
+  if (!orderRows?.length) return { success: false, error: 'Draft order not set' }
 
-  if (!orderRows) return { success: false, error: 'Draft order not set' }
-
-  // 3. Load team
-  const { data: team } = await db
-    .from('teams')
-    .select('*')
-    .eq('id', teamId)
-    .single()
-
+  const { data: team } = await db.from('teams').select('*').eq('id', teamId).single()
   if (!team) return { success: false, error: 'Team not found' }
 
-  // 4. Verify it is this team's turn
-  // Exception: if this team has an extra_pick from a previous RTM claim, allow them regardless
   if (team.extra_pick) {
-    // Clear the extra pick flag — they are using it now
     await db.from('teams').update({ extra_pick: false }).eq('id', teamId)
   } else {
-    const teamIndex = getTeamIndexForPick(room.current_pick, 9)
-    const currentTeamId = orderRows[teamIndex]?.team_id
-    if (currentTeamId !== teamId) {
-      return { success: false, error: 'Not your turn' }
-    }
+    const expectedIdx = getTeamIndexForPick(room.current_pick, 9)
+    const expectedTeamId = orderRows[expectedIdx]?.team_id
+    if (expectedTeamId !== teamId) return { success: false, error: 'Not your turn' }
   }
 
-  // 5. Lock player atomically
-  const { data: player, error: playerErr } = await db
-    .from('players')
-    .select('*')
-    .eq('id', playerId)
-    .eq('room_id', roomId)
-    .eq('available', true)
-    .single()
+  const { data: player } = await db.from('players').select('*').eq('id', playerId).eq('room_id', roomId).eq('available', true).single()
+  if (!player) return { success: false, error: 'Player already drafted or not found' }
 
-  if (playerErr || !player) {
-    return { success: false, error: 'Player already drafted or not found' }
-  }
-
-  const { error: lockErr } = await db
-    .from('players')
-    .update({ available: false })
-    .eq('id', playerId)
-    .eq('available', true)
-
+  const { error: lockErr } = await db.from('players').update({ available: false }).eq('id', playerId).eq('available', true)
   if (lockErr) return { success: false, error: 'Player was just picked by someone else' }
 
-  // 6. Insert pick record
   const round = getRoundForPick(room.current_pick)
-  const { data: pick, error: pickErr } = await db
-    .from('picks')
-    .insert({
-      room_id: roomId,
-      pick_number: room.current_pick,
-      round,
-      team_id: teamId,
-      player_id: playerId,
-      rtm_used: rtmUsed,
-    })
-    .select()
-    .single()
-
+  const { data: pick, error: pickErr } = await db.from('picks').insert({
+    room_id: roomId, pick_number: room.current_pick, round,
+    team_id: teamId, player_id: playerId, rtm_used: false,
+  }).select().single()
   if (pickErr) return { success: false, error: 'Failed to record pick' }
 
-  // 7. Check RTM eligibility — look up previous season ownership
-  const { data: prevOwner } = await db
-    .from('previous_season')
-    .select('team_name')
-    .eq('room_id', roomId)
-    .ilike('player_name', player.player_name)
-    .maybeSingle()
+  const { data: prevOwner } = await db.from('previous_season')
+    .select('team_name').eq('room_id', roomId).ilike('player_name', player.player_name).maybeSingle()
 
   if (prevOwner) {
-    const { data: eligibleTeam } = await db
-      .from('teams')
-      .select('id, rtm_remaining')
-      .eq('room_id', roomId)
-      .ilike('team_name', prevOwner.team_name)
-      .maybeSingle()
+    const { data: eligibleTeam } = await db.from('teams')
+      .select('id, rtm_remaining').eq('room_id', roomId).ilike('team_name', prevOwner.team_name).maybeSingle()
 
     if (eligibleTeam && eligibleTeam.rtm_remaining > 0 && eligibleTeam.id !== teamId) {
-      // Pause draft — do NOT advance pick counter yet
-      // do NOT write to Google Sheets yet
       await db.from('draft_rooms').update({
         status: 'paused',
         timer_active: false,
-        rtm_pending: JSON.stringify({
+        rtm_pending: {
           pick_number: room.current_pick,
           player_name: player.player_name,
           player_id: playerId,
           eligible_team_id: eligibleTeam.id,
           drafted_by_team_id: teamId,
           drafter_team_name: team.team_name,
-        })
+        },
       }).eq('id', roomId)
-
       return { success: true, pick, rtmPending: true }
     }
   }
 
-  // 8. No RTM — advance pick counter normally
-  let nextPick = room.current_pick + 1
+  await advancePick(db, roomId, room, orderRows)
 
-  if (nextPick <= room.total_picks) {
-    const nextTeamIndex = getTeamIndexForPick(nextPick, 9)
-    const nextTeamId = orderRows[nextTeamIndex]?.team_id
-    const { data: nextTeam } = await db
-      .from('teams')
-      .select('skip_next_pick')
-      .eq('id', nextTeamId)
-      .single()
-
-    if (nextTeam?.skip_next_pick) {
-      await db.from('teams').update({ skip_next_pick: false }).eq('id', nextTeamId)
-      nextPick++
-    }
-  }
-
-  const newStatus = nextPick > room.total_picks ? 'completed' : 'drafting'
-
-  await db
-    .from('draft_rooms')
-    .update({ current_pick: nextPick, timer_remaining: 60, status: newStatus })
-    .eq('id', roomId)
-
-  // 9. Write to Google Sheets
   const allTeamNames = orderRows.map((o: any) => o.teams?.team_name ?? '')
   const teamPosition = orderRows.findIndex((o: any) => o.team_id === teamId)
-  const teamPickCount = await db
-    .from('picks')
-    .select('id', { count: 'exact' })
-    .eq('room_id', roomId)
-    .eq('team_id', teamId)
-
-  writePick({
-    teamName: team.team_name,
-    playerName: player.player_name,
-    pickInTeam: (teamPickCount.count ?? 1) as number,
-    rtmUsed,
-    teamColumnIndex: teamPosition,
-    allTeamNames,
-  }).catch(console.error)
+  const { count } = await db.from('picks').select('id', { count: 'exact', head: true }).eq('room_id', roomId).eq('team_id', teamId)
+  writePick({ teamName: team.team_name, playerName: player.player_name, pickInTeam: (count ?? 1) as number, rtmUsed: false, teamColumnIndex: teamPosition, allTeamNames }).catch(console.error)
 
   return { success: true, pick }
 }
 
-/**
- * Process an RTM decision: claim or decline.
- * Can also be triggered by host as override.
- */
 export async function processRTM(params: {
   roomId: string
   claimingTeamId: string
@@ -196,234 +92,94 @@ export async function processRTM(params: {
   const db = createServiceClient()
   const { roomId, claimingTeamId, pickNumber, action, isHostOverride = false } = params
 
-  const { data: room } = await db
-    .from('draft_rooms')
-    .select('*')
-    .eq('id', roomId)
-    .single()
-
+  const { data: room } = await db.from('draft_rooms').select('*').eq('id', roomId).single()
   if (!room) return { success: false, error: 'Room not found' }
 
-  // Parse rtm_pending
   let pending: any = null
-  try { pending = room.rtm_pending ? JSON.parse(room.rtm_pending) : null } catch {}
+  try { pending = typeof room.rtm_pending === 'string' ? JSON.parse(room.rtm_pending) : room.rtm_pending } catch {}
   if (!pending) return { success: false, error: 'No RTM pending' }
-
   if (pending.pick_number !== pickNumber) return { success: false, error: 'Pick number mismatch' }
+  if (!isHostOverride && pending.eligible_team_id !== claimingTeamId) return { success: false, error: 'This RTM is not for your team' }
 
-  if (!isHostOverride && pending.eligible_team_id !== claimingTeamId) {
-    return { success: false, error: 'This RTM is not for your team' }
-  }
-
-  // Load draft order with team names for Sheets
-  const { data: orderRows } = await db
-    .from('draft_order')
-    .select('team_id, position, teams(team_name)')
-    .eq('room_id', roomId)
-    .order('position')
-
+  const { data: orderRows } = await db.from('draft_order').select('team_id, position, teams(team_name)').eq('room_id', roomId).order('position')
   const allTeamNames = (orderRows ?? []).map((o: any) => o.teams?.team_name ?? '')
 
-  // ── DECLINE ──
   if (action === 'decline') {
-    // Write original pick to Sheets now under the drafter's column
-    const { data: declinePick } = await db
-      .from('picks')
-      .select('*, players(*), teams(*)')
-      .eq('room_id', roomId)
-      .eq('pick_number', pickNumber)
-      .single()
-
+    const { data: declinePick } = await db.from('picks').select('*, players(*), teams(*)').eq('room_id', roomId).eq('pick_number', pickNumber).single()
     if (declinePick) {
-      const teamPosition = (orderRows ?? []).findIndex((o: any) => o.team_id === declinePick.team_id)
-      const teamPickCount = await db
-        .from('picks')
-        .select('id', { count: 'exact' })
-        .eq('room_id', roomId)
-        .eq('team_id', declinePick.team_id)
-
-      writePick({
-        teamName: (declinePick as any).teams?.team_name ?? '',
-        playerName: (declinePick as any).players?.player_name ?? '',
-        pickInTeam: (teamPickCount.count ?? 1) as number,
-        rtmUsed: false,
-        teamColumnIndex: teamPosition,
-        allTeamNames,
-      }).catch(console.error)
+      const teamPos = (orderRows ?? []).findIndex((o: any) => o.team_id === declinePick.team_id)
+      const { count } = await db.from('picks').select('id', { count: 'exact', head: true }).eq('room_id', roomId).eq('team_id', declinePick.team_id)
+      writePick({ teamName: (declinePick as any).teams?.team_name ?? '', playerName: (declinePick as any).players?.player_name ?? '', pickInTeam: (count ?? 1) as number, rtmUsed: false, teamColumnIndex: teamPos, allTeamNames }).catch(console.error)
     }
-
-    await advanceAfterRTMDecision(db, roomId, room, false, pending, orderRows ?? [])
+    await advancePick(db, roomId, room, orderRows ?? [])
     return { success: true }
   }
 
-  // ── CLAIM ──
-  const { data: existingPick } = await db
-    .from('picks')
-    .select('*, players(*), teams(*)')
-    .eq('room_id', roomId)
-    .eq('pick_number', pickNumber)
-    .single()
-
+  const { data: existingPick } = await db.from('picks').select('*, players(*), teams(*)').eq('room_id', roomId).eq('pick_number', pickNumber).single()
   if (!existingPick) return { success: false, error: 'Pick not found' }
 
-  const { data: claimingTeam } = await db
-    .from('teams')
-    .select('team_name, rtm_remaining')
-    .eq('id', pending.eligible_team_id)
-    .single()
-
+  const { data: claimingTeam } = await db.from('teams').select('team_name, rtm_remaining').eq('id', pending.eligible_team_id).single()
   if (!claimingTeam) return { success: false, error: 'Team not found' }
   if (claimingTeam.rtm_remaining <= 0) return { success: false, error: 'No RTM uses remaining' }
 
-  // Transfer pick to claiming team
-  await db
-    .from('picks')
-    .update({ team_id: pending.eligible_team_id, rtm_used: true })
-    .eq('id', existingPick.id)
+  await db.from('picks').update({ team_id: pending.eligible_team_id, rtm_used: true }).eq('id', existingPick.id)
+  await db.from('teams').update({ rtm_remaining: claimingTeam.rtm_remaining - 1, skip_next_pick: true }).eq('id', pending.eligible_team_id)
+  await db.from('teams').update({ extra_pick: true }).eq('id', pending.drafted_by_team_id)
 
-  // Decrement RTM count and set skip_next_pick penalty on claiming team
-  await db
-    .from('teams')
-    .update({ rtm_remaining: claimingTeam.rtm_remaining - 1, skip_next_pick: true })
-    .eq('id', pending.eligible_team_id)
+  const teamPos = (orderRows ?? []).findIndex((o: any) => o.team_id === pending.eligible_team_id)
+  const { count } = await db.from('picks').select('id', { count: 'exact', head: true }).eq('room_id', roomId).eq('team_id', pending.eligible_team_id)
+  writePick({ teamName: claimingTeam.team_name, playerName: (existingPick as any).players?.player_name ?? '', pickInTeam: (count ?? 1) as number, rtmUsed: true, teamColumnIndex: teamPos, allTeamNames }).catch(console.error)
 
-  // Write RTM pick to Sheets under the CLAIMING team's column
-  const teamPosition = (orderRows ?? []).findIndex((o: any) => o.team_id === pending.eligible_team_id)
-  const teamPickCount = await db
-    .from('picks')
-    .select('id', { count: 'exact' })
-    .eq('room_id', roomId)
-    .eq('team_id', pending.eligible_team_id)
-
-  writePick({
-    teamName: claimingTeam.team_name,
-    playerName: (existingPick as any).players?.player_name ?? '',
-    pickInTeam: (teamPickCount.count ?? 1) as number,
-    rtmUsed: true,
-    teamColumnIndex: teamPosition,
-    allTeamNames,
-  }).catch(console.error)
-
-  await advanceAfterRTMDecision(db, roomId, room, true, pending, orderRows ?? [])
-
+  await advancePick(db, roomId, room, orderRows ?? [])
   return { success: true, pick: existingPick }
 }
 
-async function advanceAfterRTMDecision(
-  db: any,
-  roomId: string,
-  room: any,
-  rtmClaimed: boolean,
-  pending: any,
-  orderRows: any[]
-) {
-  if (rtmClaimed) {
-    // RTM claimed:
-    // - Advance pick counter (the RTM pick consumed this pick_number)
-    // - Give the original drafter an extra pick by flagging their team row
-    await db
-      .from('teams')
-      .update({ extra_pick: true })
-      .eq('id', pending.drafted_by_team_id)
+async function advancePick(db: any, roomId: string, room: any, orderRows: any[]) {
+  let nextPick = room.current_pick + 1
 
-    const nextPick = room.current_pick + 1
-    const newStatus = nextPick > room.total_picks ? 'completed' : 'drafting'
-
-    await db.from('draft_rooms').update({
-      status: newStatus,
-      timer_active: newStatus === 'drafting',
-      timer_remaining: 60,
-      current_pick: nextPick,
-      rtm_pending: null,
-    }).eq('id', roomId)
-
-  } else {
-    // RTM declined — normal advance, check if next team needs to skip
-    let nextPick = room.current_pick + 1
-
-    if (nextPick <= room.total_picks) {
-      const nextTeamIndex = getTeamIndexForPick(nextPick, 9)
-      const nextTeamId = orderRows[nextTeamIndex]?.team_id
-      const { data: nextTeam } = await db
-        .from('teams')
-        .select('skip_next_pick')
-        .eq('id', nextTeamId)
-        .single()
-
+  if (nextPick <= room.total_picks) {
+    const nextTeamIdx = getTeamIndexForPick(nextPick, 9)
+    const nextTeamId = orderRows[nextTeamIdx]?.team_id
+    if (nextTeamId) {
+      const { data: nextTeam } = await db.from('teams').select('skip_next_pick').eq('id', nextTeamId).single()
       if (nextTeam?.skip_next_pick) {
         await db.from('teams').update({ skip_next_pick: false }).eq('id', nextTeamId)
         nextPick++
       }
     }
-
-    const newStatus = nextPick > room.total_picks ? 'completed' : 'drafting'
-
-    await db.from('draft_rooms').update({
-      status: newStatus,
-      timer_active: newStatus === 'drafting',
-      timer_remaining: 60,
-      current_pick: nextPick,
-      rtm_pending: null,
-    }).eq('id', roomId)
   }
+
+  const newStatus = nextPick > room.total_picks ? 'completed' : 'drafting'
+  await db.from('draft_rooms').update({ status: newStatus, timer_active: newStatus === 'drafting', timer_remaining: 60, current_pick: nextPick, rtm_pending: null }).eq('id', roomId)
 }
 
-/**
- * Undo the last pick. Host only.
- */
 export async function undoLastPick(roomId: string): Promise<PickResult> {
   const db = createServiceClient()
-
-  const { data: room } = await db
-    .from('draft_rooms')
-    .select('current_pick, status')
-    .eq('id', roomId)
-    .single()
-
+  const { data: room } = await db.from('draft_rooms').select('*').eq('id', roomId).single()
   if (!room) return { success: false, error: 'Room not found' }
+
+  if (room.rtm_pending) {
+    const pending: any = typeof room.rtm_pending === 'string' ? JSON.parse(room.rtm_pending) : room.rtm_pending
+    if (pending?.player_id) await db.from('players').update({ available: true }).eq('id', pending.player_id)
+    await db.from('picks').delete().eq('room_id', roomId).eq('pick_number', pending.pick_number)
+    await db.from('draft_rooms').update({ status: 'drafting', timer_active: true, timer_remaining: 60, rtm_pending: null }).eq('id', roomId)
+    return { success: true }
+  }
 
   const lastPickNumber = room.current_pick - 1
   if (lastPickNumber < 1) return { success: false, error: 'No picks to undo' }
 
-  const { data: lastPick } = await db
-    .from('picks')
-    .select('*')
-    .eq('room_id', roomId)
-    .eq('pick_number', lastPickNumber)
-    .single()
-
+  const { data: lastPick } = await db.from('picks').select('*').eq('room_id', roomId).eq('pick_number', lastPickNumber).single()
   if (!lastPick) return { success: false, error: 'Last pick not found' }
 
-  // Restore player availability
   await db.from('players').update({ available: true }).eq('id', lastPick.player_id)
-
-  // Delete pick
   await db.from('picks').delete().eq('id', lastPick.id)
 
-  // If RTM was used, restore RTM counter and clear skip
   if (lastPick.rtm_used) {
-    const { data: t } = await db
-      .from('teams')
-      .select('rtm_remaining')
-      .eq('id', lastPick.team_id)
-      .single()
-    await db.from('teams').update({
-      rtm_remaining: (t?.rtm_remaining ?? 0) + 1,
-      skip_next_pick: false,
-      extra_pick: false,
-    }).eq('id', lastPick.team_id)
+    const { data: t } = await db.from('teams').select('rtm_remaining').eq('id', lastPick.team_id).single()
+    await db.from('teams').update({ rtm_remaining: (t?.rtm_remaining ?? 0) + 1, skip_next_pick: false }).eq('id', lastPick.team_id)
   }
 
-  // Clear any pending RTM and roll back pick counter
-  await db
-    .from('draft_rooms')
-    .update({
-      current_pick: lastPickNumber,
-      status: 'drafting',
-      timer_remaining: 60,
-      rtm_pending: null,
-    })
-    .eq('id', roomId)
-
+  await db.from('draft_rooms').update({ current_pick: lastPickNumber, status: 'drafting', timer_active: true, timer_remaining: 60, rtm_pending: null }).eq('id', roomId)
   return { success: true }
 }
