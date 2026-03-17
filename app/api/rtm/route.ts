@@ -3,13 +3,13 @@ import { processRTM } from '@/lib/draftEngine'
 
 export async function POST(req: Request) {
   try {
-    const { roomId, claimingTeamId, pickNumber } = await req.json()
+    const { roomId, claimingTeamId, pickNumber, action, isHostOverride } = await req.json()
 
-    if (!roomId || !claimingTeamId || !pickNumber) {
+    if (!roomId || !claimingTeamId || !pickNumber || !action) {
       return NextResponse.json({ error: 'Missing required fields' }, { status: 400 })
     }
 
-    const result = await processRTM({ roomId, claimingTeamId, pickNumber })
+    const result = await processRTM({ roomId, claimingTeamId, pickNumber, action, isHostOverride })
 
     if (!result.success) {
       return NextResponse.json({ error: result.error }, { status: 409 })
